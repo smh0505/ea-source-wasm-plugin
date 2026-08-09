@@ -1,0 +1,10 @@
+{
+  "id": "ea-wasm",
+  "name": "EA",
+  "version": "0.1.0",
+  "kind": "source",
+  "entry": "ea_source_wasm_plugin.wasm",
+  "pathScopes": [
+    { "type": "registry", "hive": "HKLM", "prefix": "SOFTWARE\\WOW6432Node\\Origin Games" }
+  ]
+}

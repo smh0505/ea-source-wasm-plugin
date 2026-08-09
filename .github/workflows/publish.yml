@@ -1,0 +1,120 @@
+name: Build & Publish Plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "wit/**"
+      - "Cargo.toml"
+      - "plugin.json"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  # Milestone 14 (Concourse) - id-token lets the job request a short-lived Sigstore signing
+  # cert bound to this exact workflow run's OIDC identity; attestations lets it publish the
+  # resulting provenance attestation via GitHub's API. Free for public repos.
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read plugin version
+        id: version
+        run: echo "version=$(jq -r '.version' plugin.json)" >> "$GITHUB_OUTPUT"
+
+      # plugin.json's version is plain SemVer with real compatibility meaning (see the plugin
+      # versioning convention in Concourse's CLAUDE.md) - each version gets its own immutable
+      # release instead of overwriting a shared one, and republishing the same version twice is
+      # a no-op rather than clobbering an already-published artifact.
+      - name: Check whether this version is already published
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install wasm32-wasip1 target
+        if: steps.check.outputs.exists == 'false'
+        run: rustup target add wasm32-wasip1
+
+      - name: Install cargo-component
+        if: steps.check.outputs.exists == 'false'
+        run: cargo install cargo-component --locked
+
+      - name: Build
+        if: steps.check.outputs.exists == 'false'
+        run: cargo component build --release
+
+      - name: Stage release assets
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p dist
+          cp target/wasm32-wasip1/release/ea_source_wasm_plugin.wasm dist/
+          cp plugin.json dist/
+
+      # Milestone 14 (Concourse) - signs the built .wasm with a Sigstore attestation binding
+      # it to this exact workflow run (repo + commit + workflow file), verifiable later via
+      # `gh attestation verify` or Concourse's own install-time check
+      # (plugin_verification.rs). Proves provenance/integrity ("this really is what this
+      # repo's CI built"), not the author's trustworthiness - see Concourse's devlog for that
+      # distinction.
+      - name: Attest build provenance
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/ea_source_wasm_plugin.wasm
+
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          files: |
+            dist/ea_source_wasm_plugin.wasm
+            dist/plugin.json
+          body: |
+            Auto-published by CI from plugin.json version ${{ steps.version.outputs.version }}.
+
+            Paste this URL into Concourse's Settings -> Source tab -> Add Plugin to install:
+            https://github.com/smh0505/ea-source-wasm-plugin/releases/latest/download/plugin.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write job summary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          {
+            echo "### Published v${{ steps.version.outputs.version }}"
+            echo
+            echo "Paste this URL into Concourse's Settings -> Source tab -> Add Plugin to install:"
+            echo
+            echo '```'
+            echo "https://github.com/smh0505/ea-source-wasm-plugin/releases/latest/download/plugin.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Called directly here rather than via a separate release:published-triggered workflow -
+      # action-gh-release above publishes using the default GITHUB_TOKEN, and GitHub does not
+      # let events created by that token trigger other workflows in the same repo (loop
+      # prevention), so a release:published workflow would just never fire.
+      - name: Notify concourse-plugin-registry
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.REGISTRY_DISPATCH_TOKEN }}
+        run: |
+          id=$(jq -r '.id' plugin.json)
+          gh api repos/smh0505/concourse-plugin-registry/dispatches \
+            -f event_type=plugin-release \
+            -f "client_payload[id]=$id" \
+            -f "client_payload[ref]=v${{ steps.version.outputs.version }}"
