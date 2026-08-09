@@ -1,10 +1,15 @@
 {
   "id": "ea-wasm",
   "name": "EA",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "kind": "source",
   "entry": "ea_source_wasm_plugin.wasm",
   "pathScopes": [
-    { "type": "registry", "hive": "HKLM", "prefix": "SOFTWARE\\WOW6432Node\\Origin Games" }
+    { "type": "registry", "hive": "HKLM", "prefix": "SOFTWARE\\WOW6432Node\\Origin Games" },
+    {
+      "type": "registry",
+      "hive": "HKLM",
+      "prefix": "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+    }
   ]
 }
