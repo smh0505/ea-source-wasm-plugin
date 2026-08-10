@@ -17,7 +17,7 @@ struct EaPlugin;
 struct EaGame {
     content_id: String,
     display_name: String,
-    install_dir: Option<String>,
+    install_dir: String,
 }
 
 /// Every subkey is a real EA-purchased title's contentID - EA-specific by construction, no
@@ -60,14 +60,26 @@ fn find_ea_games() -> Result<Vec<EaGame>, String> {
 
     for content_id in content_ids {
         let key = format!("{}\\{}", ORIGIN_GAMES_KEY, content_id);
-        if let Some(display_name) = host::read_registry_string("HKLM", &key, "DisplayName") {
-            let install_dir = install_dirs_by_title.get(&display_name).cloned();
-            games.push(EaGame {
-                content_id,
-                display_name,
-                install_dir,
-            });
+        let Some(display_name) = host::read_registry_string("HKLM", &key, "DisplayName") else {
+            continue;
+        };
+        // Origin Games only means "you own this," not "it's currently installed" - matching
+        // every other source plugin's scan() semantics here (installed games only, same as
+        // Steam/GOG/Epic/Xbox/Ubisoft), a title with no install folder that actually still
+        // exists on disk is skipped rather than shown as a phantom "installed" game (e.g. an
+        // uninstalled-but-still-owned title, or a stale Uninstall-registry leftover).
+        let Some(install_dir) = install_dirs_by_title.get(&display_name) else {
+            continue;
+        };
+        if host::request_read_scope(install_dir).is_err() {
+            continue;
         }
+
+        games.push(EaGame {
+            content_id,
+            display_name,
+            install_dir: install_dir.clone(),
+        });
     }
 
     Ok(games)
@@ -80,9 +92,9 @@ fn to_game_entry(game: &EaGame) -> GameEntry {
         executable_path: format!("origin2://game/launch/?offerIds={}", game.content_id),
         platform: "ea".to_string(),
         cover_art_url: None,
-        // Feeds the host's folder-based playtime tracking. None if the Uninstall-registry
-        // title match above found nothing - scan()/launch() still work, just no playtime.
-        install_dir: game.install_dir.clone(),
+        // Feeds the host's folder-based playtime tracking - always present now, since
+        // find_ea_games only includes games with a real, currently-existing install folder.
+        install_dir: Some(game.install_dir.clone()),
     }
 }
 

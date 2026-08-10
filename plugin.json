@@ -1,7 +1,7 @@
 {
   "id": "ea-wasm",
   "name": "EA",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "kind": "source",
   "entry": "ea_source_wasm_plugin.wasm",
   "pathScopes": [
